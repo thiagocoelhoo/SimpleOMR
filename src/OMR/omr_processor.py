@@ -1,11 +1,12 @@
 import cv2
 import numpy as np
 from typing import List, Tuple
+import math
 
 # --- CONSTANTES GLOBAIS DE CONFIGURAÇÃO ---
 # Parâmetros para detecção da FOLHA (recortar_gabarito)
 CONTOUR_AREA_THRESHOLD_SHEET = 1000
-KERNEL_SIZE_SHEET = (10, 10)
+KERNEL_SIZE_SHEET = (20, 20)
 CLOSING_ITERATIONS_SHEET = 3
 
 # Parâmetros para detecção das MARCAÇÕES (contornar_respostas)
@@ -14,7 +15,7 @@ ADAPTIVE_THRESH_BLOCK_SIZE = 141
 ADAPTIVE_THRESH_C = 10
 KERNEL_SIZE_MARK = (3, 3)
 CONTRAST_ALPHA = 1.5
-BRIGHTNESS_BETA = 30
+BRIGHTNESS_BETA = 25
 
 # Coordenadas X das colunas de alternativas na imagem JÁ RECORTADA
 # Assumimos que o gabarito é alinhado e padronizado após o 'crop'.
@@ -35,11 +36,10 @@ COORDS_ALTERNATIVAS_X = [
 ALTERNATIVAS = tuple('ABCDE')
 
 # CONSTANTES PARA O MAPPING Y -> QUESTÃO
-Y_START_QUESTION_1 = 11 
-Y_SPACING_PER_QUESTION = 31.4
+Y_START_QUESTION_1 = 5
+Y_SPACING_PER_QUESTION = 30
 QUESTIONS_PER_COLUMN = 15
-Y_MARGIN_ERROR = 30
-
+Y_MARGIN_ERROR = 15
 
 def rotate_image(img: np.ndarray, center: Tuple[float, float], angle: float, scale: float = 1.0) -> np.ndarray:
     """
@@ -60,8 +60,44 @@ class OmrProcessor:
     def __init__(self, alternative_coords_x: List[int] = COORDS_ALTERNATIVAS_X):
         """Inicializa o processador com as coordenadas X esperadas."""
         self.alternative_coords_x = alternative_coords_x
+    
+    def preprocess_img(self, img: np.ndarray):
+        # # 1. Pré-processamento e Ajuste de Contraste
+        # gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        # # Ajusta brilho e contraste para realçar as marcações escuras
+        # gray = cv2.convertScaleAbs(gray, alpha=CONTRAST_ALPHA, beta=BRIGHTNESS_BETA)
 
-    def _get_sheet_countors(self, img: np.ndarray):
+        # # 2. Limiarização Adaptativa
+        # # Usada para isolar marcações (preenchimentos) escuras em papel mais claro.
+        # thresh = cv2.adaptiveThreshold(
+        #     gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 
+        #     ADAPTIVE_THRESH_BLOCK_SIZE, ADAPTIVE_THRESH_C
+        # )
+        
+        # # 3. Operação Morfológica: Erosão
+        # # Ajuda a remover ruídos e a garantir que os contornos sejam apenas das marcações.
+        # kernel = cv2.getStructuringElement(cv2.MORPH_RECT, KERNEL_SIZE_MARK)
+        # closed = cv2.erode(thresh, kernel)
+        # ------------------------------------------------------------------------
+
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        
+        # 1. Thresholding
+        # Usamos BINARY_INV para que as áreas escuras (o objeto/folha) fiquem brancas (255)
+        # para detecção de contornos.
+        thresh = cv2.adaptiveThreshold(
+            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 27, 10
+        )
+        
+        # 2. Operação Morfológica: Fechamento (Closing)
+        # Preenche pequenos buracos e junta áreas próximas da folha para melhorar a detecção de contorno.
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, KERNEL_SIZE_SHEET)
+        closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=CLOSING_ITERATIONS_SHEET)
+
+
+        return closed
+
+    def _get_sheet_countor(self, img: np.ndarray):
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         
         # 1. Thresholding
@@ -78,19 +114,7 @@ class OmrProcessor:
 
         # 3. Detecção de Contornos (Find Contours)
         contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        return contours
-    
-    def align_and_crop_sheet(self, img: np.ndarray) -> np.ndarray:
-        """
-        Localiza a folha de respostas na imagem, corrige a rotação e recorta.
 
-        :param img: Imagem de entrada da folha de respostas.
-        :return: A imagem da folha de respostas alinhada e recortada.
-        :raises Exception: Se o gabarito principal não for detectado.
-        """
-        output = img.copy()
-        
-        contours = self._get_sheet_countors(img)
         best_contour = None
         max_area = 0
 
@@ -107,30 +131,48 @@ class OmrProcessor:
         if best_contour is None:
             raise Exception("A área principal do gabarito não foi detectada. Tente ajustar os parâmetros (kernel, area_minima).")
 
+        return best_contour
+    
+    def align_and_crop_sheet(self, img: np.ndarray) -> np.ndarray:
+        """
+        Localiza a folha de respostas na imagem, corrige a rotação e recorta.
+
+        :param img: Imagem de entrada da folha de respostas.
+        :return: A imagem da folha de respostas alinhada e recortada.
+        :raises Exception: Se o gabarito principal não for detectado.
+        """
+        output = img.copy()
+
+        best_contour = self._get_sheet_countor(img)
+        
         # 5. Correção de Rotação e Recorte
         # Obtém o retângulo com a menor área que envolve o contorno
         rect = cv2.minAreaRect(best_contour)
         (center, (width, height), angle) = rect
-
+        
         # Normaliza o ângulo para garantir que a folha fique na vertical
         # Se a folha estiver em pé (portrait), o ângulo precisa ser corrigido
-        if width < height:
-            angle = 90 + angle
-
+        # if width < height:
+        #     angle = 90 + angle
+        if angle > 60 or angle < -60:
+            angle = (angle % 90) - 90
+        
         # Obtém o retângulo delimitador (x, y, largura, altura) para o recorte final
         x, y, w, h = cv2.boundingRect(best_contour)
 
         # Corrige o ângulo da imagem
         # rotated_image = output
-        rotated_image = rotate_image(output, (x + w/2, y + h/2), angle - 90, 1.0)
-        
-        # Recorta a área de interesse
-        TOP_PADDING = 50 # Padding para ignorar o cabeçalho do gabarito
-        cropped_image = rotated_image[y + TOP_PADDING : y + h, x : x + w]
+        rotated_image = rotate_image(output, center, angle - 1.5, 1.0)
+        best_contour = self._get_sheet_countor(rotated_image)
+        x, y, w, h = cv2.boundingRect(best_contour)
 
+        # Recorta a área de interesse
+        TOP_PADDING = int(0.0945179584120983 * h) # Padding para ignorar o cabeçalho do gabarito
+        cropped_image = rotated_image[y + TOP_PADDING : y + h, x : x + w]
+        cropped_image = cv2.resize(cropped_image, dsize=(513, 479))
         return cropped_image
 
-    def _get_question_number(self, y_coord: int, x_coord: int) -> int:
+    def _get_question_number(self, y_coord: float, x_coord: int) -> int:
         """
         Mapeia uma coordenada Y para um número de questão (1 a 30)
         e ajusta para a coluna (esquerda: 1-15, direita: 16-30).
@@ -175,6 +217,9 @@ class OmrProcessor:
         marks = dict()
         output_img = img.copy()
 
+        # kernel = np.ones((4, 4),np.uint8)
+        # img = cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel, iterations=1)
+
         # 1. Pré-processamento e Ajuste de Contraste
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         # Ajusta brilho e contraste para realçar as marcações escuras
@@ -204,7 +249,7 @@ class OmrProcessor:
                 x, y, w, h = cv2.boundingRect(contour)
                 alternative_value = self._map_x_to_alternative(x)
                 
-                question_number = self._get_question_number(y + h, x) # Usamos o centro Y da marcação
+                question_number = self._get_question_number(y + h / 2, x) # Usamos o centro Y da marcação
                 if question_number > 0 and alternative_value is not None:
                     cv2.rectangle(output_img, (x, y), (x + w, y + h), (0, 255, 0), -1)
                     
