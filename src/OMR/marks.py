@@ -1,271 +1,311 @@
 import cv2
-import os
 import numpy as np
-from typing import Dict, Any, Tuple
+from typing import Optional
 
-from omr_config import *
+from .omr_config import (
+    DEBUG, ALTERNATIVAS, QUESTIONS_PER_COLUMN, COLUMN_WIDTH,
+    Y_START_QUESTION_1, Y_SPACING_PER_QUESTION, CONTOUR_AREA_MIN_MARK
+)
 
-def show(img: np.ndarray, force: bool = False, title: str = 'img', wait: bool = True):
-    """Exibe a imagem para depuração."""
-    if DEBUG or force:
-        resized = cv2.resize(img, dsize=None, fx=0.4, fy=0.4)
-        cv2.imshow(title, resized)
-        if wait:
-            cv2.waitKey(0)
+MarkData = tuple[int, str, int, int, int, int]  # QuestionNumber, Value, X, Y, W, H
 
 
-def process_image(img: np.ndarray) -> np.ndarray:
-    """Aplica o pré-processamento para destacar as marcações."""
-    # Step 1: gray
-    if len(img.shape) == 3:
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+def _preprocess_image(image: np.ndarray) -> np.ndarray:
+    """Aplica o pré-processamento de imagem para realçar marcações em uma única linha."""
+    
+    # Turn image to gray
+    if len(image.shape) == 3:
+        gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     else:
-        gray = img
-    # show(gray)
+        gray_image = image
 
-    kernel = np.ones((3, 3), np.uint8)
-    gray = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel, iterations=5)
-    # show(gray)
+    # Aplica fechamento morfológico para preencher pequenas lacunas na marcação
+    kernel_close = np.ones((3, 3), np.uint8)
+    gray_image = cv2.morphologyEx(gray_image, cv2.MORPH_CLOSE, kernel_close, iterations=5)
 
-    # Step 2: adjust contrars
-    gray = cv2.convertScaleAbs(gray, alpha=1.5, beta=30)
-    # show(gray)
+    # Erosão para refinar bordas
+    kernel_erode = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    gray_image = cv2.morphologyEx(gray_image, cv2.MORPH_ERODE, kernel_erode, iterations=3)
 
-    # Step 4: thresh
-    gray = cv2.adaptiveThreshold(
-        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 141, 10)
-    # show(gray)
+    # Ajusta o contraste para melhor separação de fundo/marcação
+    enhanced_image = cv2.convertScaleAbs(gray_image, alpha=1.5, beta=30)
 
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    gray = cv2.morphologyEx(gray, cv2.MORPH_DILATE, kernel, iterations=3)
-    # show(gray)
+    # Threshold
+    thresh_image = cv2.adaptiveThreshold(enhanced_image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 127, 10)
+  
+    # Erosão e Fechamento finais para limpeza e destaque
+    kernel_rect_3 = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    eroded_final = cv2.morphologyEx(thresh_image, cv2.MORPH_ERODE, kernel_rect_3, iterations=3)
 
-    # Step 6: close and erode
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-    output = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel, iterations=1)
-    # show(output)
-
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    output = cv2.morphologyEx(output, cv2.MORPH_ERODE, kernel, iterations=3)
-    # show(output)
-
-    return output
-
-
-def find_marks_contours(img: np.ndarray) -> Tuple[np.ndarray, ...]:
-    if len(img.shape) == 3:
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    contours, _ = cv2.findContours(
-        img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    output = []
-    for contour in contours:
-        if 700 < cv2.contourArea(contour) < 4800:
-            output.append(contour)
+    kernel_rect_2 = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+    output_image = cv2.morphologyEx(eroded_final, cv2.MORPH_CLOSE, kernel_rect_2, iterations=1)
     
-    return tuple(output)
+    return output_image
 
+
+def _find_mark_contours(image: np.ndarray) -> tuple[np.ndarray, ...]:
+    """Encontra e filtra contornos que representam marcações (bolhas preenchidas)."""
+    # Converte para escala de cinza se não estiver
+    if len(image.shape) == 3:
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    contours, _ = cv2.findContours(image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
-def map_x_to_alternative(x: int, img_width: int) -> str | None:
-    """Mapeia a coordenada X da marcação para a alternativa mais próxima (A-E) 
-    dentro da largura da linha (subimagem)."""
-    # Se a largura da imagem for 400, x / 400 * 5 calcula o índice da alternativa
-    # A largura da subimagem de uma linha é WIDTH_COLUMN (400)
-    alternative_index = int(x / img_width * len(ALTERNATIVAS))
+    # Filtra contornos por área. Assumimos um range de área adequado para a bolha
+    filtered_contours = []
     
-    if 0 <= alternative_index < len(ALTERNATIVAS):
+    for c in contours:
+        x, y, w, h = cv2.boundingRect(c)
+        if 700 < cv2.contourArea(c) < 4800 and w > 20 and h > 27:
+            filtered_contours.append(c)
+    
+    return tuple(filtered_contours)
+
+
+def _map_x_to_alternative(x_coord: int, line_width: int) -> Optional[str]:
+    """Mapeia a coordenada X (relativa à linha) para a alternativa (A-E) mais próxima."""
+    num_alternatives = len(ALTERNATIVAS)
+    
+    # Normaliza X para o range [0, num_alternatives-1]
+    alternative_index = int(x_coord / line_width * num_alternatives)
+    
+    if 0 <= alternative_index < num_alternatives:
         return ALTERNATIVAS[alternative_index]
     return None
 
 
-def extract_question_line(image: np.ndarray, question_index: int) -> np.ndarray:
-    """
-    Recorta a imagem para isolar a linha de uma única questão.
-    O índice da questão (0 a 14) é usado para calcular as coordenadas Y.
-    """
-    # Coordenadas Y (topo e base) da linha da questão
+def _crop_question(image: np.ndarray, question_index: int) -> np.ndarray:
+    """Recorta a subimagem correspondente à linha de uma única questão."""
     y_start = int(Y_START_QUESTION_1 + question_index * Y_SPACING_PER_QUESTION)
     y_end = int(y_start + Y_SPACING_PER_QUESTION)
     
-    # Garantir que as coordenadas estejam dentro dos limites da imagem
-    height, width, *_ = image.shape
+    height = image.shape[0]
     y_end = min(y_end, height)
     
-    # Recorta a subimagem
-    # Assumimos que a coluna tem largura total (0 a WIDTH_COLUMN)
-    line_image = image[y_start:y_end, 0:WIDTH_COLUMN]
+    line_image = image[y_start:y_end, 0:COLUMN_WIDTH]
     
     return line_image
 
 
-def extract_answers_per_line(original_image: np.ndarray) -> Tuple[np.ndarray, Dict[int, str | None]]:
+def find_marks(column_image: np.ndarray) -> list[MarkData]:
     """
-    Processa a imagem dividindo-a em linhas de questões, 
-    processando cada linha separadamente e mapeando as respostas.
+    Detecta todas as marcações em uma imagem de coluna, retornando o valor e 
+    as coordenadas absolutas de cada marca individual.
     """
-    marks: Dict[int, str | None] = {}
-    output_img = original_image.copy()
+    marks: list[MarkData] = []
     
-    # Itera sobre cada questão (índice 0 a 14)
     for question_index in range(QUESTIONS_PER_COLUMN):
-        # O número real da questão (1 a 15)
         question_number = question_index + 1
         
-        # 1. Extrair a linha da questão
-        line_image = extract_question_line(original_image, question_index)
+        # Uso dos aliases internos para manter o estilo da sua sugestão
+        question_image = _crop_question(column_image, question_index)
         
-        if line_image.size == 0:
-            print(f"Aviso: Linha da questão {question_number} vazia.")
-            marks[question_number] = None
+        if question_image.size == 0:
             continue
+            
+        preprocessed = _preprocess_image(question_image)
+        contours = _find_mark_contours(preprocessed)
 
-        # 2. Pré-processar a linha
-        preprocessed_line = process_image(line_image)
-        # show(preprocessed_line, title=f"Q{question_number} Processada")
-        
-        # 3. Encontrar contornos na linha
-        contours = find_marks_contours(preprocessed_line)
-        
-        # Coordenadas Y reais na imagem original
         y_offset = int(Y_START_QUESTION_1 + question_index * Y_SPACING_PER_QUESTION)
-        
-        detected_alternatives: list[str] = []
-        
-        # 4. Mapear contornos para alternativas
-        for contour in contours:
-            area = cv2.contourArea(contour)
+        line_width = question_image.shape[1]
 
-            # Filtro de área mais estrito é vital aqui, pois processamos apenas uma pequena área
-            # Ajuste CONTOUR_AREA_MIN_MARK se necessário, mas 50 é um bom ponto de partida.
-            if area > CONTOUR_AREA_MIN_MARK:
-                x_line, y_line, w, h = cv2.boundingRect(contour) # Coordenadas relativas à linha
+        for contour in contours:
+            x, y, w, h = cv2.boundingRect(contour) # Coordenadas relativas à linha            
+            center_x = int(x + w / 2)
+            
+            value = _map_x_to_alternative(center_x, line_width)
+            
+            if value is not None:
+                x_original = x
+                y_original = y + y_offset
                 
-                # Centro da marcação
-                center_x_line = int(x_line + w / 2)
+                # question_number é o número da questão DENTRO da coluna (1 a 15)
+                marks.append((question_number, value, x_original, y_original, w, h))
                 
-                # Mapeia X para a alternativa (usando a largura da linha)
-                alternative_value = map_x_to_alternative(center_x_line, line_image.shape[1])
+    return marks
+
+
+def _group_marks_by_question(all_marks: list[MarkData], column_offset: int) -> dict[int, tuple[Optional[str], list[MarkData]]]:
+    """Agrupa as marcações e determina a resposta final para cada questão."""
+    grouped_marks: dict[int, tuple[Optional[str], list[MarkData]]] = {}
+    
+    # Agrupamento e determinação da resposta (string)
+    marks_temp: dict[int, list[MarkData]] = {}
+    alternatives_temp: dict[int, set[str]] = {}
+
+    for q_num_col, value, x, y, w, h in all_marks:
+        q_num_abs = q_num_col + column_offset
+        
+        marks_temp.setdefault(q_num_abs, []).append((q_num_col, value, x, y, w, h))
+        alternatives_temp.setdefault(q_num_abs, set()).add(value)
+
+    # Finaliza a resposta (string) e estrutura o retorno
+    for q_num_abs, alt_set in alternatives_temp.items():
+        if len(alt_set) == 0:
+            result_answer = None
+        elif len(alt_set) == 1:
+            result_answer = list(alt_set)[0]
+        else:
+            result_answer = ','.join(sorted(alt_set))
+            
+        grouped_marks[q_num_abs] = (result_answer, marks_temp[q_num_abs])
+
+    return grouped_marks
+
+
+def get_answers(column_images: tuple[np.ndarray, ...]) -> dict[int, Optional[str]]:
+    """
+    Processa todas as colunas, detecta as marcações e retorna o dicionário de respostas (JSON).
+    """
+    all_answers: dict[int, Optional[str]] = {}
+    
+    for i, col_img in enumerate(column_images):
+        # Detecção (MarkData)
+        marks_data = find_marks(col_img)
+        
+        # Agrupamento e Resposta
+        column_offset = i * QUESTIONS_PER_COLUMN
+        grouped_marks = _group_marks_by_question(marks_data, column_offset)
+        
+        # Extração final do JSON
+        for q_num_abs, (result_answer, _) in grouped_marks.items():
+            all_answers[q_num_abs] = result_answer
+            
+    return all_answers
+
+
+def paint_marks(column_images: tuple[np.ndarray, ...]) -> tuple[np.ndarray, ...]:
+    """
+    Processa as colunas e retorna as imagens pintadas com as marcações detectadas.
+    Formato: quadrado verde com texto "{q_number}: {answer}".
+    """
+    painted_columns: list[np.ndarray] = []
+
+    for i, original_image in enumerate(column_images):
+        # 1. Detecção (MarkData)
+        marks_data = find_marks(original_image)
+        
+        # 2. Agrupamento e Resposta
+        column_offset = i * QUESTIONS_PER_COLUMN
+        grouped_marks = _group_marks_by_question(marks_data, column_offset)
+        
+        output_img = original_image.copy()
+
+        # 3. Desenho
+        for q_num_abs, (result_answer, marks_in_q) in grouped_marks.items():
+            if result_answer is None:
+                continue
+
+            for _, _, x_original, y_original, w, h in marks_in_q:
                 
-                if alternative_value is not None:
-                    # Coordenadas absolutas para desenhar na imagem original
+                # Desenha o retângulo (Verde: 0, 255, 0)
+                cv2.rectangle(output_img, (x_original, y_original), (x_original + w, y_original + h), (0, 255, 0), -1)
+
+                # Desenha o texto do resultado (Preto)
+                text_label = f'{q_num_abs}: {result_answer}'
+                text_position = (x_original + 8, y_original + int(h/2) + 8)
+                cv2.putText(
+                    img=output_img,
+                    text=text_label,
+                    org=text_position,
+                    fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+                    fontScale=0.8,
+                    color=(0, 0, 0), 
+                    thickness=2,
+                    lineType=cv2.LINE_AA
+                )
+        
+        # Desenhar linhas guias (Para visualização)
+        for q_idx in range(QUESTIONS_PER_COLUMN):
+            y_start = int(Y_START_QUESTION_1 + q_idx * Y_SPACING_PER_QUESTION)
+            y_end = int(y_start + Y_SPACING_PER_QUESTION)
+            cv2.rectangle(output_img, (0, y_start), (COLUMN_WIDTH, y_end), (255, 0, 0), 2)
+
+        painted_columns.append(output_img)
+        
+    return tuple(painted_columns)
+
+
+# def get_painted_columns(column_images: tuple[np.ndarray, ...]) -> tuple[np.ndarray, ...]:
+    """
+    Processa as colunas e retorna as imagens pintadas com as marcações detectadas,
+    substituindo o retorno do JSON/Dicionário de respostas.
+    """
+    painted_columns: list[np.ndarray] = []
+
+    for i, original_image in enumerate(column_images):
+        # O número inicial da questão depende da coluna
+        question_offset = i * QUESTIONS_PER_COLUMN
+        output_img = original_image.copy()
+
+        for question_index in range(QUESTIONS_PER_COLUMN):
+            question_number = question_index + 1 + question_offset
+            
+            # 1. Obter a linha e pré-processar
+            line_image = _crop_question(original_image, question_index)
+            if line_image.size == 0:
+                continue
+
+            preprocessed_line = _preprocess_image(line_image)
+            contours = _find_mark_contours(preprocessed_line)
+            
+            y_offset = int(Y_START_QUESTION_1 + question_index * Y_SPACING_PER_QUESTION)
+            detected_alternatives: list[tuple[str, int, int, int, int]] = [] # (alternative, x, y, w, h)
+
+            # 2. Mapear contornos para alternativas
+            for contour in contours:
+                area = cv2.contourArea(contour)
+                if area > CONTOUR_AREA_MIN_MARK:
+                    x_line, y_line, w, h = cv2.boundingRect(contour)
+                    center_x_line = int(x_line + w / 2)
+                    alternative_value = _map_x_to_alternative(center_x_line, line_image.shape[1])
+                    
+                    if alternative_value is not None and alternative_value not in [d[0] for d in detected_alternatives]:
+                        detected_alternatives.append((alternative_value, x_line, y_line, w, h))
+
+            # 3. Determinar a resposta final (igual a process_question_line)
+            result_answer: Optional[str]
+            if len(detected_alternatives) == 0:
+                result_answer = None
+            elif len(detected_alternatives) == 1:
+                result_answer = detected_alternatives[0][0]
+            else:
+                result_answer = ','.join(sorted([d[0] for d in detected_alternatives]))
+
+            # 4. Desenhar com a formatação solicitada
+            if result_answer is not None:
+                # Se for marcação dupla, pinta todos, se for simples, pinta só o detectado.
+                # Para simplificar e manter a organização, pintaremos apenas a primeira marcação
+                # ou a mais à esquerda, mas o texto usará a resposta final.
+                
+                # Usaremos todas as marcações detectadas (mesmo as que resultam em múltipla) para desenhar
+                for alt_val, x_line, y_line, w, h in detected_alternatives:
                     x_original = x_line
                     y_original = y_line + y_offset
-                    center_x_original = center_x_line
-                    center_y_original = int(y_line + h / 2) + y_offset
-                    
-                    # Desenha o retângulo na imagem de saída
+
+                    # Cor verde (0, 255, 0)
                     cv2.rectangle(output_img, (x_original, y_original), (x_original + w, y_original + h), (0, 255, 0), -1)
-                    
-                    # Desenha o texto do resultado
-                    fontFace = cv2.FONT_HERSHEY_SIMPLEX
-                    textPosition = (x_original + 8, y_original + int(h/2) + 8)
+
+                    # Texto: "{q_number}: {answer}"
+                    text_label = f'{question_number}: {result_answer}'
+                    text_position = (x_original + 8, y_original + int(h/2) + 8)
                     cv2.putText(
                         img=output_img,
-                        text=f'{question_number}-{alternative_value}',
-                        org=textPosition,
-                        fontFace=fontFace,
+                        text=text_label,
+                        org=text_position,
+                        fontFace=cv2.FONT_HERSHEY_SIMPLEX,
                         fontScale=0.8,
-                        color=(0, 0, 0),
-                        thickness=2, # Reduzido para melhor visualização
+                        color=(0, 0, 0), # Cor preta para o texto
+                        thickness=2,
                         lineType=cv2.LINE_AA
                     )
-                    
-                    if alternative_value not in detected_alternatives:
-                         detected_alternatives.append(alternative_value)
-
-        # 5. Armazena a resposta final para a questão
-        if len(detected_alternatives) == 0:
-            marks[question_number] = None
-        elif len(detected_alternatives) == 1:
-            marks[question_number] = detected_alternatives[0]
-        else:
-            # Marcação dupla/múltipla
-            marks[question_number] = ','.join(sorted(detected_alternatives))
-
-    # Desenha as linhas guias na imagem de saída (opcional, para visualização)
-    for i in range(QUESTIONS_PER_COLUMN):
-        cv2.rectangle(output_img, (0, int(i * Y_SPACING_PER_QUESTION)), (WIDTH_COLUMN, int((i+1) * Y_SPACING_PER_QUESTION)), (255, 0, 0), 2)
         
-    return output_img, marks
+        # Desenhar linhas guias (para visualização)
+        for q_idx in range(QUESTIONS_PER_COLUMN):
+            y_start = int(Y_START_QUESTION_1 + q_idx * Y_SPACING_PER_QUESTION)
+            y_end = int(y_start + Y_SPACING_PER_QUESTION)
+            cv2.rectangle(output_img, (0, y_start), (COLUMN_WIDTH, y_end), (255, 0, 0), 2)
 
-
-def extract_answers(image: np.ndarray) -> Tuple[np.ndarray, Dict[int, str | None]]:
-    """Função de alto nível para extrair as respostas usando o novo método linha-a-linha."""
-    return extract_answers_per_line(image)
-
-
-def main():
-    try:
-        from columns import find_columns, perspective_warp
-    except ImportError:
-        print("Erro: Módulos 'find_columns' e 'perspective_warp' não encontrados. Certifique-se de que estão disponíveis.")
-        return
-    
-
-
-    # O resto da lógica principal permanece o mesmo
-    # imagens = ['/home/thiago/Downloads/WhatsApp Image 2025-10-10 at 19.27.29(3).jpeg']
-    imagens = [
-        '/home/thiago/Downloads/WhatsApp Image 2025-10-10 at 20.07.09(1).jpeg',
-        '/home/thiago/Downloads/WhatsApp Image 2025-10-10 at 19.27.29(3).jpeg',
-        '/home/thiago/Downloads/WhatsApp Image 2025-10-10 at 19.27.29(2).jpeg',
-        '/home/thiago/Downloads/WhatsApp Image 2025-10-10 at 19.27.30(1).jpeg',
-    ]
-    
-    # for root, _, files in os.walk('/home/thiago/Downloads/'):
-    #     for file in files:
-    #         if file.endswith('jpeg'):
-    #             imagens.append(os.path.join(root, file))
-    
-    for img_path in imagens:
-        img = cv2.imread(img_path)
-        show(img, force=True)
-
-        if img is None:
-            print("Erro ao carregar a imagem. Verifique o caminho.")
-            return
+        painted_columns.append(output_img)
         
-        left_col_rect, right_col_rect = find_columns(img)
-
-        left_img = perspective_warp(img, left_col_rect)
-        right_img = perspective_warp(img, right_col_rect)
-        
-        # Processa as duas colunas
-        imagens = [left_img, right_img]
-
-        if not imagens:
-            print("Nenhuma imagem de coluna processada.")
-            return
-
-        all_answers = {}
-
-        for i, image in enumerate(imagens):
-            # A nova função extract_answers usa o método linha-a-linha
-            output_image, answers = extract_answers(image)
-
-            # Ajusta os números das questões para a segunda coluna (16-30)
-            if i == 1:
-                adjusted_answers = {q + QUESTIONS_PER_COLUMN: a for q, a in answers.items()}
-                all_answers.update(adjusted_answers)
-            else:
-                all_answers.update(answers)
-
-            show(output_image, force=True)
-
-        # Print do resultado final
-        print("\nRespostas Detectadas (Todas as Questões):")
-        print(img_path)
-        for q, a in sorted(all_answers.items()):
-            # Exibe 'Não Marcada' para None
-            display_a = a if a is not None else 'Não Marcada' 
-            print(f"Q{q:02}: {display_a}")
-        print("---------------------------------")
-
-
-if __name__ == '__main__':
-    main()
-    
-# Limpa as janelas abertas
-if __name__ == '__main__':
-    cv2.destroyAllWindows()
+    return tuple(painted_columns)

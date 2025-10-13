@@ -1,231 +1,199 @@
 import numpy as np
-import os
 import cv2
-
-from omr_config import *
-
-
-def show(img, force=False, title='img', wait=True):
-    if DEBUG or force:
-        resized = cv2.resize(img, dsize=None, fx=0.4, fy=0.4)
-        cv2.imshow(title, resized)
-        if wait:
-            cv2.waitKey(0)
+from .omr_config import *
 
 
-def order_points(pts):
-    # Initialize the ordered coordinates array: TL, TR, BR, BL
-    rect = np.zeros((4, 2), dtype="float32")
+def order_points(points: np.ndarray) -> np.ndarray:
+    """
+    Ordena os 4 pontos do retângulo: Top-Left, Top-Right, Bottom-Right, Bottom-Left.
+    """
+    ordered_rect = np.zeros((4, 2), dtype="float32")
 
-    # The top-left point has the smallest sum (x + y),
-    # the bottom-right has the largest sum.
-    s = pts.sum(axis=1)
-    rect[0] = pts[np.argmin(s)]
-    rect[2] = pts[np.argmax(s)]
+    # TL: menor soma (x + y); BR: maior soma (x + y)
+    s = points.sum(axis=1)
+    ordered_rect[0] = points[np.argmin(s)]
+    ordered_rect[2] = points[np.argmax(s)]
 
-    # Compute the difference (x - y) for the remaining points.
-    # The top-right will have the smallest difference,
-    # the bottom-left will have the largest difference.
-    diff = np.diff(pts, axis=1)
-    rect[1] = pts[np.argmin(diff)]
-    rect[3] = pts[np.argmax(diff)]
+    # TR: menor diferença (x - y); BL: maior diferença (x - y)
+    diff = np.diff(points, axis=1)
+    ordered_rect[1] = points[np.argmin(diff)]
+    ordered_rect[3] = points[np.argmax(diff)]
 
-    return rect
+    return ordered_rect
 
 
-def perspective_warp(image, corner_points):    
-    # Order the points: TL, TR, BR, BL
-    (tl, tr, br, bl) = corner_points
+def apply_perspective_warp(image: np.ndarray, source_points: np.ndarray) -> np.ndarray:    
+    """
+    Aplica a correção de perspectiva à imagem com base nos 4 pontos de canto.
+    A imagem resultante é redimensionada para uma dimensão padrão.
+    """
+    (tl, tr, br, bl) = source_points
 
-    # Calculate the maximum width of the new image
-    widthA = np.sqrt(((br[0] - bl[0]) ** 2) + ((br[1] - bl[1]) ** 2))
-    widthB = np.sqrt(((tr[0] - tl[0]) ** 2) + ((tr[1] - tl[1]) ** 2))
-    maxWidth = max(int(widthA), int(widthB))
+    # Calcula a largura e altura máximas do novo retângulo para o warp
+    width_br_bl = np.sqrt(((br[0] - bl[0]) ** 2) + ((br[1] - bl[1]) ** 2))
+    width_tr_tl = np.sqrt(((tr[0] - tl[0]) ** 2) + ((tr[1] - tl[1]) ** 2))
+    max_width = max(int(width_br_bl), int(width_tr_tl))
 
-    # Calculate the maximum height of the new image
-    heightA = np.sqrt(((tr[0] - br[0]) ** 2) + ((tr[1] - br[1]) ** 2))
-    heightB = np.sqrt(((tl[0] - bl[0]) ** 2) + ((tl[1] - bl[1]) ** 2))
-    maxHeight = max(int(heightA), int(heightB))
+    height_tr_br = np.sqrt(((tr[0] - br[0]) ** 2) + ((tr[1] - br[1]) ** 2))
+    height_tl_bl = np.sqrt(((tl[0] - bl[0]) ** 2) + ((tl[1] - bl[1]) ** 2))
+    max_height = max(int(height_tr_br), int(height_tl_bl))
 
-    # Define the destination points for the perspective transform (a perfect rectangle)
-    dst = np.array([
-        [0, 0],                            # Top-Left
-        [maxWidth - 1, 0],                 # Top-Right
-        [maxWidth - 1, maxHeight - 1],     # Bottom-Right
-        [0, maxHeight - 1]],               # Bottom-Left
+    # Define os pontos de destino (retângulo perfeito)
+    dest_points = np.array([
+        [0, 0],                            
+        [max_width - 1, 0],                 
+        [max_width - 1, max_height - 1],     
+        [0, max_height - 1]],               
         dtype="float32"
     )
 
-    # Compute the perspective transform matrix (M)
-    M = cv2.getPerspectiveTransform(corner_points, dst)
-
-    # Apply the perspective transformation
-    warped = cv2.warpPerspective(image, M, (maxWidth, maxHeight))
-    warped = cv2.resize(warped, dsize=(400, 1200))
-    return warped
-
-
-def remove_small_blocks(gray: cv2.typing.MatLike):
-    contours, _ = cv2.findContours(gray, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    for c in contours:
-        if cv2.contourArea(c) < 500:
-            x, y, w, h = cv2.boundingRect(c)
-            cv2.rectangle(gray, (x, y), (x + w, y + h), (0, 0, 0), -1)
-
-    return gray
+    # Calcula e aplica a transformação de perspectiva
+    matrix = cv2.getPerspectiveTransform(source_points, dest_points)
+    warped_image = cv2.warpPerspective(image, matrix, (max_width, max_height))
+    
+    # Redimensiona para um tamanho padrão
+    final_image = cv2.resize(warped_image, dsize=(COLUMN_WIDTH, COLUMN_HEIGHT))
+    return final_image
 
 
-def preprocess_image(img):
-    # Step 1: gray
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    show(gray)
+def _remove_small_blocks(binary_image: cv2.typing.MatLike) -> cv2.typing.MatLike:
+    """Remove contornos muito pequenos, preenchendo-os com preto."""
+    contours, _ = cv2.findContours(binary_image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    gray = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 41, 10)
-    show(gray)
+    for contour in contours:
+        if cv2.contourArea(contour) < 500:
+            x, y, w, h = cv2.boundingRect(contour)
+            # Preenche o retângulo delimitador com preto (0)
+            cv2.rectangle(binary_image, (x, y), (x + w, y + h), 0, -1)
 
-    # Step 2: adjust contrars
-    gray = cv2.convertScaleAbs(gray, alpha=1.0, beta=-20)
-    show(gray)
-
-    # Step 3: erode
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (4, 4))
-    gray = cv2.morphologyEx(gray, cv2.MORPH_ERODE, kernel, iterations=2)
-    show(gray)
-
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-    gray = cv2.morphologyEx(gray, cv2.MORPH_DILATE, kernel, iterations=2)
-    show(gray)
-
-    # Step 4: thresh
-    gray = cv2.adaptiveThreshold(
-        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 101, 10)
-    show(gray)
-
-    # Step 5: remove small blocks
-    output = remove_small_blocks(gray)
-    show(output)
-
-    # Step 6: close
-    kernel = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
-    output = cv2.morphologyEx(output, cv2.MORPH_CLOSE, kernel, iterations=1)
-    show(output)
-
-    # kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    # output = cv2.morphologyEx(output, cv2.MORPH_ERODE, kernel, iterations=3)
-    # show(output)
-
-    # horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (45, 1))
-    # output = cv2.morphologyEx(output, cv2.MORPH_OPEN, horizontal_kernel, iterations=2)
-    # show(output)
-
-    return output
+    return binary_image
 
 
-def find_columns_contours(img):
+def preprocess_image(image: np.ndarray) -> np.ndarray:
+    """Pré-processamento de imagem para detecção de colunas (Versão 1)."""
+    gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    # Limiar adaptativo binário invertido
+    binary_image = cv2.adaptiveThreshold(
+        gray_image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 37, 10
+    )
+
+    # Remove ruído e pequenos artefatos
+    cleaned_image = _remove_small_blocks(binary_image)
+
+    # Fechamento morfológico para unir áreas próximas
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (6, 6))
+    closed_image = cv2.morphologyEx(cleaned_image, cv2.MORPH_CLOSE, kernel, iterations=2)
+
+    return closed_image
+
+
+def preprocess_image_v2(image: np.ndarray) -> np.ndarray:
     """
-    Busca por colunas do gabarito na imagem
+    Pré-processamento alternativo usando Círculos de Hough para detecção de colunas (Versão 2).
+    A detecção de colunas foca nas bolhas do gabarito.
     """
+    gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    
+    # Limiar binário normal para destacar as bolhas
+    binary_image = cv2.adaptiveThreshold(
+        gray_image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 41, 5
+    )
+    
+    # Imagem de saída preta
+    output_image = np.zeros(gray_image.shape, dtype=np.uint8)
 
-    if len(img.shape) == 3:
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    # Detecção de Círculos de Hough
+    circles = cv2.HoughCircles(
+        binary_image, cv2.HOUGH_GRADIENT, dp=1.2, minDist=25,
+        param1=10, param2=20, minRadius=12, maxRadius=18
+    )
 
-    contornos, _ = cv2.findContours(img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if circles is not None:
+        circles = np.uint16(np.around(circles))
+        for i in circles[0, :]:
+            # Desenha os círculos detectados na imagem preta (branco)
+            cv2.circle(output_image, (i[0], i[1]), i[2], 255, 2)
+    
+    # Fechamento morfológico para agrupar os círculos em formas de coluna
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (10, 10))
+    closed_image = cv2.morphologyEx(output_image, cv2.MORPH_CLOSE, kernel, iterations=4)
+    
+    return closed_image
 
-    # Filtrar contornos por proporções
-    contours = []
-    for c in contornos:
+
+def find_main_column_contours(processed_image: np.ndarray) -> list[np.ndarray]:
+    """Busca e filtra os 2 maiores contornos que parecem colunas na imagem pré-processada."""
+    if len(processed_image.shape) == 3:
+        processed_image = cv2.cvtColor(processed_image, cv2.COLOR_BGR2GRAY)
+
+    all_contours, _ = cv2.findContours(
+        processed_image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+
+    # Filtra contornos por proporção (colunas são altas e finas)
+    filtered_contours = []
+    for c in all_contours:
         x, y, w, h = cv2.boundingRect(c)
-
+        
+        # Garante que 'h' é o maior lado (altura) para cálculo da proporção
         if w > h:
-            h, w = w, h
+            w, h = h, w
 
+        # Filtro de proporção: W/H >= 1/4 (coluna razoavelmente fina/alta)
         if w / h >= 1/4:
-            contours.append(c)
+            filtered_contours.append(c)
 
-    contours.sort(key=lambda c: cv2.contourArea(c), reverse=True)
-    return contours[:2]
-
-
-def find_and_draw_rectangles(img):
-    img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-    contornos = find_columns_contours(img)
-
-    for contorno in contornos:
-        x, y, w, h = cv2.boundingRect(contorno)
-        cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
-
-    return img
+    # Seleciona os dois maiores contornos em área
+    filtered_contours.sort(key=lambda c: cv2.contourArea(c), reverse=True)
+    return filtered_contours[:2]
 
 
-def find_aprox_rect(img):
-    if len(img.shape) == 2:
-        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+def find_column_rectangles(processed_image: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Encontra os 4 vértices aproximados (retângulo de área mínima) das duas principais colunas.
+    """
+    # Se a imagem for em escala de cinza/binária, precisamos de BGR para o desenho,
+    # mas o detector de contornos só precisa de 1 canal.
+    contours = find_main_column_contours(processed_image)
     
-    contornos = find_columns_contours(img)
-    columns = []
+    column_rect_points: list[np.ndarray] = []
 
-    for c in contornos:
-        # Encontrar o retângulo de área mínima que envolve o contorno
-        rect = cv2.minAreaRect(c)
+    for contour in contours:
+        # Encontra o retângulo de área mínima
+        min_area_rect = cv2.minAreaRect(contour)
         
-        # Obter os 4 vértices do retângulo
-        box = cv2.boxPoints(rect)
+        # Obtém os 4 vértices (box points)
+        box_points = cv2.boxPoints(min_area_rect)
         
-        # Converter os vértices para o formato esperado (int32 e reshape)
-        box = np.intp(box)
-        box = order_points(box)
+        # Ordena os pontos (TL, TR, BR, BL)
+        ordered_points = order_points(box_points.astype(np.float32))
 
-        columns.append(box)
+        column_rect_points.append(ordered_points)
     
-    column_left, column_right = columns[:2]
-    if column_left[0][0] > column_right[0][0]:
-        column_left, column_right = column_right, column_left
+    # Garante que a coluna da esquerda esteja na primeira posição
+    col_left, col_right = column_rect_points[0], column_rect_points[1]
+    if col_left[0][0] > col_right[0][0]:
+        col_left, col_right = col_right, col_left
     
-    return column_left, column_right
+    return col_left, col_right
 
 
-def draw_aprox_rectangles(img, corners):
-    if len(img.shape) == 2:
-        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-
-    # img = cv2.drawContours(img, corners, -1, (0, 0, 255), 10)
-    return img
-
-
-def find_columns(image):
-    preprocessed_image = preprocess_image(image)
-    return find_aprox_rect(preprocessed_image)
-
-
-def main():
-    imagens = []
-    for root, _, files in os.walk('imagens_old'):
-        for file in files:
-            imagens.append(os.path.join(root, file))
-
-    for i, image_path in enumerate(imagens):
-        image = cv2.imread(image_path)
-
+def find_columns(image: np.ndarray, preprocess_method: int = 1) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Função principal. Pré-processa a imagem, detecta colunas e corrige a perspectiva.
+    Retorna a imagem da coluna esquerda e da coluna direita.
+    """
+    if preprocess_method == 1:
         preprocessed_image = preprocess_image(image)
-        rectangles = find_and_draw_rectangles(preprocessed_image)
-        show(rectangles)
+    else:
+        preprocessed_image = preprocess_image_v2(image)
+    
+    # Encontra os vértices das colunas
+    col_left_points, col_right_points = find_column_rectangles(preprocessed_image)
 
-        col_left, col_right = find_aprox_rect(preprocessed_image)
-        columns_image = draw_aprox_rectangles(image, [col_left, col_right])        
-        show(columns_image, title=f"Pagina", wait=False)
-        
-        col_left_img = perspective_warp(image, col_left)
-        col_right_img = perspective_warp(image, col_right)
-        
-        cv2.imwrite(f'colunas/left_{i}.png', col_left_img)
-        cv2.imwrite(f'colunas/right_{i}.png', col_right_img)
-        
-        show(col_left_img, title="column_left", wait=False)
-        show(col_right_img, title="column_right", wait=False)
-        
-        cv2.waitKey(0)
-
-
-if __name__ == '__main__':
-    main()
+    # Aplica a correção de perspectiva para ambas as colunas
+    col_left_img = apply_perspective_warp(image, col_left_points)
+    col_right_img = apply_perspective_warp(image, col_right_points)
+    
+    return col_left_img, col_right_img

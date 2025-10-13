@@ -7,4 +7,6 @@ Y_START_QUESTION_1 = 0
 Y_SPACING_PER_QUESTION = 79.5  # Altura de cada linha de questão
 QUESTIONS_PER_COLUMN = 15
 CONTOUR_AREA_MIN_MARK = 50
-WIDTH_COLUMN = 400  # Largura esperada da coluna, usada para extração da linha
+
+COLUMN_WIDTH = 400
+COLUMN_HEIGHT = 1200

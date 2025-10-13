@@ -15,5 +15,4 @@ RUN pip install -r requirements.txt
 COPY ./src ./src
 
 EXPOSE 8000
-# CMD ["fastapi", "dev", "src/api.py", "--host", "0.0.0.0"]
 CMD ["fastapi", "run", "--workers", "10", "src/api.py", "--host", "0.0.0.0"]
