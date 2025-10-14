@@ -78,7 +78,8 @@ async def get_answers_from_pdf(files: list[UploadFile]):
     for file in files:
         images = await extract_images_from_pdf(file)
         
-        for image in images:    
+        for image in images:   
+            image = cv2.rotate(image, cv2.ROTATE_180)
             image = cv2.resize(image, dsize=(1400, 2200))
             column_images = find_columns(image)
             answers = get_answers(column_images)
