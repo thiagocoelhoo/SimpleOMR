@@ -1,10 +1,8 @@
-import io
-
 from fastapi import FastAPI, UploadFile
 from fastapi.responses import Response
 import numpy as np
 import cv2
-from pypdf import PdfReader
+import fitz
 
 from OMR.columns import find_columns
 from OMR.marks import get_answers, paint_marks
@@ -30,17 +28,26 @@ async def extract_images_from_pdf(file: UploadFile):
         raise Exception("Formato de arquivo inválido. O arquivo deve ser um PDF.")
 
     file_content = await file.read()
-    reader = PdfReader(io.BytesIO(file_content))
+    doc = fitz.open('pdf', file_content)
     
-    images = []
-    for _, page in enumerate(reader.pages):
-        for image_file in page.images:
-            image_bytes = np.frombuffer(image_file.data, dtype=np.uint8)
-            image = cv2.imdecode(image_bytes, cv2.IMREAD_COLOR)
+    output_images = []
 
-            if image is not None:
-                images.append(image)
-    return images
+    for page_num in range(len(doc)):
+        page = doc.load_page(page_num)
+        for img_data in page.get_images(full=False):
+            xref = img_data[0]
+            rects = page.get_image_rects(xref)
+            if rects:
+                for rect in rects:
+                    matrix = fitz.Matrix(3, 3)
+                    pixmap = page.get_pixmap(matrix=matrix, clip=rect)
+
+                    image_bytes = np.frombuffer(pixmap.tobytes(), np.uint8)
+                    image = cv2.imdecode(image_bytes, cv2.IMREAD_COLOR)
+
+                    output_images.append(image)
+
+    return output_images
 
 
 @app.post('/show_answers')
@@ -77,9 +84,7 @@ async def get_answers_from_pdf(files: list[UploadFile]):
     
     for file in files:
         images = await extract_images_from_pdf(file)
-        
         for image in images:   
-            image = cv2.rotate(image, cv2.ROTATE_180)
             image = cv2.resize(image, dsize=(1400, 2200))
             column_images = find_columns(image)
             answers = get_answers(column_images)
