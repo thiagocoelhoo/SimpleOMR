@@ -69,14 +69,79 @@ def _remove_small_blocks(binary_image: cv2.typing.MatLike) -> cv2.typing.MatLike
     return binary_image
 
 
+def convertScale(img, alpha, beta):
+    """Add bias and gain to an image with saturation arithmetics. Unlike
+    cv2.convertScaleAbs, it does not take an absolute value, which would lead to
+    nonsensical results (e.g., a pixel at 44 with alpha = 3 and beta = -210
+    becomes 78 with OpenCV, when in fact it should become 0).
+    """
+    new_img = img * alpha + beta
+    new_img[new_img < 0] = 0
+    new_img[new_img > 255] = 255
+    return new_img.astype(np.uint8)
+
+# Automatic brightness and contrast optimization with optional histogram clipping
+def automatic_brightness_and_contrast(image, clip_hist_percent=25):
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    # Calculate grayscale histogram
+    hist = cv2.calcHist([gray],[0],None,[256],[0,256])
+    hist_size = len(hist)
+
+    # Calculate cumulative distribution from the histogram
+    accumulator = []
+    accumulator.append(float(hist[0]))
+    for index in range(1, hist_size):
+        accumulator.append(accumulator[index -1] + float(hist[index]))
+
+    # Locate points to clip
+    maximum = accumulator[-1]
+    clip_hist_percent *= (maximum/100.0)
+    clip_hist_percent /= 2.0
+
+    # Locate left cut
+    minimum_gray = 0
+    while accumulator[minimum_gray] < clip_hist_percent:
+        minimum_gray += 1
+
+    # Locate right cut
+    maximum_gray = hist_size -1
+    while accumulator[maximum_gray] >= (maximum - clip_hist_percent):
+        maximum_gray -= 1
+
+    # Calculate alpha and beta values
+    alpha = 255 / (maximum_gray - minimum_gray)
+    beta = -minimum_gray * alpha
+
+    auto_result = convertScale(image, alpha=alpha, beta=beta)
+    return (auto_result, alpha, beta)
+
+
+def adjust_gamma(image, gamma=1.2):
+    # build a lookup table mapping the pixel values [0, 255] to
+    # their adjusted gamma values
+    invGamma = 1.0 / gamma
+    table = np.array([((i / 255.0) ** invGamma) * 255
+        for i in np.arange(0, 256)]).astype("uint8")
+
+    # apply gamma correction using the lookup table
+    return cv2.LUT(image, table)
+
+
 def preprocess_image(image: np.ndarray) -> np.ndarray:
     """Pré-processamento de imagem para detecção de colunas (Versão 1)."""
+    image = adjust_gamma(image, gamma=5)
+    image, _, _ = automatic_brightness_and_contrast(image, clip_hist_percent=5)
+
     gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
     # Limiar adaptativo binário invertido
     binary_image = cv2.adaptiveThreshold(
-        gray_image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 37, 10
+        gray_image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 10
     )
+
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+    binary_image = cv2.morphologyEx(binary_image, cv2.MORPH_CLOSE, kernel, iterations=2)
 
     # Remove ruído e pequenos artefatos
     cleaned_image = _remove_small_blocks(binary_image)
