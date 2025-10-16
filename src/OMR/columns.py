@@ -132,7 +132,7 @@ def preprocess_image(image: np.ndarray) -> np.ndarray:
     """Pré-processamento de imagem para detecção de colunas (Versão 1)."""
     image = adjust_gamma(image, gamma=5)
     image, _, _ = automatic_brightness_and_contrast(image, clip_hist_percent=5)
-
+    # show(image)
     gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
     # Limiar adaptativo binário invertido
@@ -140,8 +140,8 @@ def preprocess_image(image: np.ndarray) -> np.ndarray:
         gray_image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 10
     )
 
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
-    binary_image = cv2.morphologyEx(binary_image, cv2.MORPH_CLOSE, kernel, iterations=2)
+    # kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+    # binary_image = cv2.morphologyEx(binary_image, cv2.MORPH_CLOSE, kernel, iterations=2)
 
     # Remove ruído e pequenos artefatos
     cleaned_image = _remove_small_blocks(binary_image)

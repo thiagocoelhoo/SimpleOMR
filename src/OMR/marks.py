@@ -12,7 +12,6 @@ MarkData = tuple[int, str, int, int, int, int]  # QuestionNumber, Value, X, Y, W
 
 def _preprocess_image(image: np.ndarray) -> np.ndarray:
     """Aplica o pré-processamento de imagem para realçar marcações em uma única linha."""
-    
     # Turn image to gray
     if len(image.shape) == 3:
         gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -28,10 +27,10 @@ def _preprocess_image(image: np.ndarray) -> np.ndarray:
     gray_image = cv2.morphologyEx(gray_image, cv2.MORPH_ERODE, kernel_erode, iterations=3)
 
     # Ajusta o contraste para melhor separação de fundo/marcação
-    enhanced_image = cv2.convertScaleAbs(gray_image, alpha=1.5, beta=30)
+    enhanced_image = cv2.convertScaleAbs(gray_image, alpha=1.2, beta=30)
 
     # Threshold
-    thresh_image = cv2.adaptiveThreshold(enhanced_image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 127, 10)
+    thresh_image = cv2.adaptiveThreshold(enhanced_image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 197, 10)
   
     # Erosão e Fechamento finais para limpeza e destaque
     kernel_rect_3 = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
@@ -216,91 +215,6 @@ def paint_marks(column_images: tuple[np.ndarray, ...]) -> tuple[np.ndarray, ...]
                 )
         
         # Desenhar linhas guias (Para visualização)
-        for q_idx in range(QUESTIONS_PER_COLUMN):
-            y_start = int(Y_START_QUESTION_1 + q_idx * Y_SPACING_PER_QUESTION)
-            y_end = int(y_start + Y_SPACING_PER_QUESTION)
-            cv2.rectangle(output_img, (0, y_start), (COLUMN_WIDTH, y_end), (255, 0, 0), 2)
-
-        painted_columns.append(output_img)
-        
-    return tuple(painted_columns)
-
-
-# def get_painted_columns(column_images: tuple[np.ndarray, ...]) -> tuple[np.ndarray, ...]:
-    """
-    Processa as colunas e retorna as imagens pintadas com as marcações detectadas,
-    substituindo o retorno do JSON/Dicionário de respostas.
-    """
-    painted_columns: list[np.ndarray] = []
-
-    for i, original_image in enumerate(column_images):
-        # O número inicial da questão depende da coluna
-        question_offset = i * QUESTIONS_PER_COLUMN
-        output_img = original_image.copy()
-
-        for question_index in range(QUESTIONS_PER_COLUMN):
-            question_number = question_index + 1 + question_offset
-            
-            # 1. Obter a linha e pré-processar
-            line_image = _crop_question(original_image, question_index)
-            if line_image.size == 0:
-                continue
-
-            preprocessed_line = _preprocess_image(line_image)
-            contours = _find_mark_contours(preprocessed_line)
-            
-            y_offset = int(Y_START_QUESTION_1 + question_index * Y_SPACING_PER_QUESTION)
-            detected_alternatives: list[tuple[str, int, int, int, int]] = [] # (alternative, x, y, w, h)
-
-            # 2. Mapear contornos para alternativas
-            for contour in contours:
-                area = cv2.contourArea(contour)
-                if area > CONTOUR_AREA_MIN_MARK:
-                    x_line, y_line, w, h = cv2.boundingRect(contour)
-                    center_x_line = int(x_line + w / 2)
-                    alternative_value = _map_x_to_alternative(center_x_line, line_image.shape[1])
-                    
-                    if alternative_value is not None and alternative_value not in [d[0] for d in detected_alternatives]:
-                        detected_alternatives.append((alternative_value, x_line, y_line, w, h))
-
-            # 3. Determinar a resposta final (igual a process_question_line)
-            result_answer: Optional[str]
-            if len(detected_alternatives) == 0:
-                result_answer = None
-            elif len(detected_alternatives) == 1:
-                result_answer = detected_alternatives[0][0]
-            else:
-                result_answer = ','.join(sorted([d[0] for d in detected_alternatives]))
-
-            # 4. Desenhar com a formatação solicitada
-            if result_answer is not None:
-                # Se for marcação dupla, pinta todos, se for simples, pinta só o detectado.
-                # Para simplificar e manter a organização, pintaremos apenas a primeira marcação
-                # ou a mais à esquerda, mas o texto usará a resposta final.
-                
-                # Usaremos todas as marcações detectadas (mesmo as que resultam em múltipla) para desenhar
-                for alt_val, x_line, y_line, w, h in detected_alternatives:
-                    x_original = x_line
-                    y_original = y_line + y_offset
-
-                    # Cor verde (0, 255, 0)
-                    cv2.rectangle(output_img, (x_original, y_original), (x_original + w, y_original + h), (0, 255, 0), -1)
-
-                    # Texto: "{q_number}: {answer}"
-                    text_label = f'{question_number}: {result_answer}'
-                    text_position = (x_original + 8, y_original + int(h/2) + 8)
-                    cv2.putText(
-                        img=output_img,
-                        text=text_label,
-                        org=text_position,
-                        fontFace=cv2.FONT_HERSHEY_SIMPLEX,
-                        fontScale=0.8,
-                        color=(0, 0, 0), # Cor preta para o texto
-                        thickness=2,
-                        lineType=cv2.LINE_AA
-                    )
-        
-        # Desenhar linhas guias (para visualização)
         for q_idx in range(QUESTIONS_PER_COLUMN):
             y_start = int(Y_START_QUESTION_1 + q_idx * Y_SPACING_PER_QUESTION)
             y_end = int(y_start + Y_SPACING_PER_QUESTION)
