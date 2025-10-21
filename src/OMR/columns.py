@@ -128,27 +128,41 @@ def adjust_gamma(image, gamma=1.2):
     return cv2.LUT(image, table)
 
 
-def preprocess_image(image: np.ndarray) -> np.ndarray:
+# def show(img, debug):
+#     if debug:
+#         img = cv2.resize(img, dsize=None, fx=0.4, fy=0.4)
+#         cv2.imshow("img", img)
+#         cv2.waitKey(0)
+
+def preprocess_image(image: np.ndarray, debug) -> np.ndarray:
     """Pré-processamento de imagem para detecção de colunas (Versão 1)."""
     image = adjust_gamma(image, gamma=5)
     image, _, _ = automatic_brightness_and_contrast(image, clip_hist_percent=5)
-    # show(image)
+    # show(image, debug)
     gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
     # Limiar adaptativo binário invertido
     binary_image = cv2.adaptiveThreshold(
-        gray_image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 10
+        gray_image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 13
     )
+    # show(binary_image, debug)
 
-    # kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
-    # binary_image = cv2.morphologyEx(binary_image, cv2.MORPH_CLOSE, kernel, iterations=2)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 1))
+    horizontal_lines = cv2.morphologyEx(binary_image, cv2.MORPH_ERODE, kernel, iterations=1)
+    # show(horizontal_lines, debug)
 
     # Remove ruído e pequenos artefatos
     cleaned_image = _remove_small_blocks(binary_image)
+    # show(cleaned_image, debug)
+    
+    # Remover marcas cinza (valores entre 1 e 240)
+    _, cleaned_image = cv2.threshold(cleaned_image, 240, 255, cv2.THRESH_BINARY)
+    # show(cleaned_image, debug)
 
     # Fechamento morfológico para unir áreas próximas
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (6, 6))
     closed_image = cv2.morphologyEx(cleaned_image, cv2.MORPH_CLOSE, kernel, iterations=2)
+    # show(closed_image, debug)
 
     return closed_image
 
@@ -244,13 +258,13 @@ def find_column_rectangles(processed_image: np.ndarray) -> tuple[np.ndarray, np.
     return col_left, col_right
 
 
-def find_columns(image: np.ndarray, preprocess_method: int = 1) -> tuple[np.ndarray, np.ndarray]:
+def find_columns(image: np.ndarray, preprocess_method: int = 1, debug=False) -> tuple[np.ndarray, np.ndarray]:
     """
     Função principal. Pré-processa a imagem, detecta colunas e corrige a perspectiva.
     Retorna a imagem da coluna esquerda e da coluna direita.
     """
     if preprocess_method == 1:
-        preprocessed_image = preprocess_image(image)
+        preprocessed_image = preprocess_image(image, debug=debug)
     else:
         preprocessed_image = preprocess_image_v2(image)
     

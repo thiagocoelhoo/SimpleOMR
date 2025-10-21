@@ -10,35 +10,49 @@ from .omr_config import (
 MarkData = tuple[int, str, int, int, int, int]  # QuestionNumber, Value, X, Y, W, H
 
 
-def _preprocess_image(image: np.ndarray) -> np.ndarray:
+# def show(img, debug: bool = False) -> None:
+#     """Função auxiliar de debug para exibir imagens."""
+#     if debug:
+#         cv2.imshow('img', img)
+#         cv2.waitKey(0)
+
+
+def _preprocess_image(image: np.ndarray, debug: bool = False) -> np.ndarray:
     """Aplica o pré-processamento de imagem para realçar marcações em uma única linha."""
     # Turn image to gray
     if len(image.shape) == 3:
         gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     else:
         gray_image = image
+    # show(gray_image, debug)
 
     # Aplica fechamento morfológico para preencher pequenas lacunas na marcação
     kernel_close = np.ones((3, 3), np.uint8)
     gray_image = cv2.morphologyEx(gray_image, cv2.MORPH_CLOSE, kernel_close, iterations=5)
+    # show(gray_image, debug)
 
     # Erosão para refinar bordas
     kernel_erode = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
     gray_image = cv2.morphologyEx(gray_image, cv2.MORPH_ERODE, kernel_erode, iterations=3)
+    # show(gray_image, debug)
 
     # Ajusta o contraste para melhor separação de fundo/marcação
     enhanced_image = cv2.convertScaleAbs(gray_image, alpha=1.2, beta=30)
+    # show(enhanced_image, debug)
 
     # Threshold
-    thresh_image = cv2.adaptiveThreshold(enhanced_image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 197, 10)
-  
+    thresh_image = cv2.adaptiveThreshold(enhanced_image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 197, 13)
+    # show(thresh_image, debug)
+
     # Erosão e Fechamento finais para limpeza e destaque
     kernel_rect_3 = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    eroded_final = cv2.morphologyEx(thresh_image, cv2.MORPH_ERODE, kernel_rect_3, iterations=3)
+    eroded_final = cv2.morphologyEx(thresh_image, cv2.MORPH_ERODE, kernel_rect_3, iterations=5)
+    # show(eroded_final, debug)
 
     kernel_rect_2 = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
     output_image = cv2.morphologyEx(eroded_final, cv2.MORPH_CLOSE, kernel_rect_2, iterations=1)
-    
+    # show(output_image, debug)
+
     return output_image
 
 
@@ -86,7 +100,7 @@ def _crop_question(image: np.ndarray, question_index: int) -> np.ndarray:
     return line_image
 
 
-def find_marks(column_image: np.ndarray) -> list[MarkData]:
+def find_marks(column_image: np.ndarray, debug: bool = False) -> list[MarkData]:
     """
     Detecta todas as marcações em uma imagem de coluna, retornando o valor e 
     as coordenadas absolutas de cada marca individual.
@@ -102,7 +116,7 @@ def find_marks(column_image: np.ndarray) -> list[MarkData]:
         if question_image.size == 0:
             continue
             
-        preprocessed = _preprocess_image(question_image)
+        preprocessed = _preprocess_image(question_image, debug=debug)
         contours = _find_mark_contours(preprocessed)
 
         y_offset = int(Y_START_QUESTION_1 + question_index * Y_SPACING_PER_QUESTION)
@@ -173,7 +187,7 @@ def get_answers(column_images: tuple[np.ndarray, ...]) -> dict[int, Optional[str
     return all_answers
 
 
-def paint_marks(column_images: tuple[np.ndarray, ...]) -> tuple[np.ndarray, ...]:
+def paint_marks(column_images: tuple[np.ndarray, ...], debug: bool = False) -> tuple[np.ndarray, ...]:
     """
     Processa as colunas e retorna as imagens pintadas com as marcações detectadas.
     Formato: quadrado verde com texto "{q_number}: {answer}".
@@ -182,7 +196,7 @@ def paint_marks(column_images: tuple[np.ndarray, ...]) -> tuple[np.ndarray, ...]
 
     for i, original_image in enumerate(column_images):
         # 1. Detecção (MarkData)
-        marks_data = find_marks(original_image)
+        marks_data = find_marks(original_image, debug=debug)
         
         # 2. Agrupamento e Resposta
         column_offset = i * QUESTIONS_PER_COLUMN
@@ -198,7 +212,7 @@ def paint_marks(column_images: tuple[np.ndarray, ...]) -> tuple[np.ndarray, ...]
             for _, _, x_original, y_original, w, h in marks_in_q:
                 
                 # Desenha o retângulo (Verde: 0, 255, 0)
-                cv2.rectangle(output_img, (x_original, y_original), (x_original + w, y_original + h), (0, 255, 0), -1)
+                cv2.rectangle(output_img, (x_original, y_original), (x_original + w, y_original + h), (0, 255, 0), 10)
 
                 # Desenha o texto do resultado (Preto)
                 text_label = f'{q_num_abs}: {result_answer}'
