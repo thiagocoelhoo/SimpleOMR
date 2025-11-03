@@ -6,6 +6,7 @@ import fitz
 
 from OMR.columns import find_columns
 from OMR.marks import get_answers, paint_marks
+from OMR.ocr import find_matricula
 
 app = FastAPI()
 
@@ -71,23 +72,31 @@ async def get_answers_from_image(files: list[UploadFile]):
     for file in files:
         image = await load_image(file)
         image = cv2.resize(image, dsize=(1400, 2200))
-
+        matricula = find_matricula(image)
         column_images = find_columns(image)
         answers = get_answers(column_images)
-        all_answers.append(answers)
+        all_answers.append({
+            'matricula': matricula,
+            'gabarito': answers
+        })
+
     return all_answers
 
 
 @app.post('/get_answers_pdf')
 async def get_answers_from_pdf(files: list[UploadFile]):
     all_answers = []
-    
     for file in files:
         images = await extract_images_from_pdf(file)
         for image in images:   
             image = cv2.resize(image, dsize=(1400, 2200))
+            matricula = find_matricula(image)
             column_images = find_columns(image)
             answers = get_answers(column_images)
-            all_answers.append(answers)
+
+            all_answers.append({
+                'matricula': matricula,
+                'gabarito': answers
+            })
 
     return all_answers
