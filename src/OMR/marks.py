@@ -37,11 +37,11 @@ def _preprocess_image(image: np.ndarray, debug: bool = False) -> np.ndarray:
     # show(gray_image, debug)
 
     # Ajusta o contraste para melhor separação de fundo/marcação
-    enhanced_image = cv2.convertScaleAbs(gray_image, alpha=1.2, beta=30)
+    enhanced_image = cv2.convertScaleAbs(gray_image, alpha=1.0, beta=20)
     # show(enhanced_image, debug)
 
     # Threshold
-    thresh_image = cv2.adaptiveThreshold(enhanced_image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 197, 13)
+    thresh_image = cv2.adaptiveThreshold(enhanced_image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 351, 11)
     # show(thresh_image, debug)
 
     # Erosão e Fechamento finais para limpeza e destaque
@@ -69,7 +69,7 @@ def _find_mark_contours(image: np.ndarray) -> tuple[np.ndarray, ...]:
     
     for c in contours:
         x, y, w, h = cv2.boundingRect(c)
-        if 700 < cv2.contourArea(c) < 4800 and w > 20 and h > 27:
+        if 400 < cv2.contourArea(c) < 5000 and 100 > w > 10 and h > 10:
             filtered_contours.append(c)
     
     return tuple(filtered_contours)
@@ -80,7 +80,7 @@ def _map_x_to_alternative(x_coord: int, line_width: int) -> Optional[str]:
     num_alternatives = len(ALTERNATIVAS)
     
     # Normaliza X para o range [0, num_alternatives-1]
-    alternative_index = int(x_coord / line_width * num_alternatives)
+    alternative_index = int(x_coord / line_width * (num_alternatives + 1)) - 1
     
     if 0 <= alternative_index < num_alternatives:
         return ALTERNATIVAS[alternative_index]
@@ -212,11 +212,11 @@ def paint_marks(column_images: tuple[np.ndarray, ...], debug: bool = False) -> t
             for _, _, x_original, y_original, w, h in marks_in_q:
                 
                 # Desenha o retângulo (Verde: 0, 255, 0)
-                cv2.rectangle(output_img, (x_original, y_original), (x_original + w, y_original + h), (0, 255, 0), 10)
+                cv2.rectangle(output_img, (x_original, y_original), (x_original + w, y_original + h), (0, 255, 0), -1)
 
                 # Desenha o texto do resultado (Preto)
                 text_label = f'{q_num_abs}: {result_answer}'
-                text_position = (x_original + 8, y_original + int(h/2) + 8)
+                text_position = (x_original - 10, y_original + int(h/2) + 8)
                 cv2.putText(
                     img=output_img,
                     text=text_label,

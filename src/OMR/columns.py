@@ -147,16 +147,8 @@ def preprocess_image(image: np.ndarray, debug) -> np.ndarray:
     )
     # show(binary_image, debug)
 
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 1))
-    horizontal_lines = cv2.morphologyEx(binary_image, cv2.MORPH_ERODE, kernel, iterations=1)
-    # show(horizontal_lines, debug)
-
-    # Remove ruído e pequenos artefatos
-    cleaned_image = _remove_small_blocks(binary_image)
-    # show(cleaned_image, debug)
-    
     # Remover marcas cinza (valores entre 1 e 240)
-    _, cleaned_image = cv2.threshold(cleaned_image, 240, 255, cv2.THRESH_BINARY)
+    _, cleaned_image = cv2.threshold(binary_image, 240, 255, cv2.THRESH_BINARY)
     # show(cleaned_image, debug)
 
     # Fechamento morfológico para unir áreas próximas
