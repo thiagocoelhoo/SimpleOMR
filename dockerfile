@@ -1,11 +1,7 @@
 FROM python:3.12-slim
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    build-essential \
-    tesseract-ocr \
-    tesseract-ocr-por \
-    && rm -rf /var/lib/apt/lists/*
+    apt-get install -y --no-install-recommends build-essential
 
 WORKDIR /app
 
@@ -17,4 +13,4 @@ RUN pip install -r requirements.txt
 COPY ./src ./src
 
 EXPOSE 8000
-CMD ["fastapi", "run", "--workers", "10", "src/api.py", "--host", "0.0.0.0"]
+CMD ["fastapi", "run", "--workers", "5", "src/api.py", "--host", "0.0.0.0"]

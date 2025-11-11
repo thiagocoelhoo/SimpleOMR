@@ -1,0 +1,12 @@
+services:
+  omr-service:
+    build: .
+    ports:
+      - "8000:8000"
+    
+    deploy:
+      resources:
+        limits:
+          cpus: '2'      # Limite de 2 CPUs
+          memory: 2048M  # Limite de 2048 Megabytes de memória
+  
