@@ -1,38 +1,29 @@
-import cv2
-import numpy as np
-import pytesseract
-from pytesseract import Output
+import easyocr
 
-
-def preprocess(img):
-    norm_img = np.zeros((img.shape[0], img.shape[1]))
-    img = cv2.normalize(img, norm_img, 0, 255, cv2.NORM_MINMAX)
-    gray_image = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    # Limiar adaptativo binário invertido
-    binary_image = cv2.adaptiveThreshold(
-        gray_image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 101, 7
-    )
-    
-    img = cv2.cvtColor(binary_image, cv2.COLOR_GRAY2BGR)
-
-    return img
-
+reader = easyocr.Reader(['pt'], gpu=False) # Defina gpu=True se tiver uma GPU compatível para acelerar
 
 def find_matricula(image):
-    image = preprocess(image)
-    image_width = image.shape[1]
+    """
+    Localiza uma matrícula (string numérica)
+    com base em critérios de tamanho e confiança usando EasyOCR.
+    """
 
-    results  = pytesseract.image_to_data(image, output_type=Output.DICT, lang="por")
-    for i in range(0, len(results['text'])):
-        x = results['left'][i]
-        y = results['top'][i]
+    # Reconhecimento de Texto com EasyOCR
+    results = reader.readtext(image)
+    print('results:', results)
 
-        w = results['width'][i]
-        h = results['height'][i]
+    for (bbox, text, conf) in results:    
+        # Coordenadas do bounding box
+        x_min = int(bbox[0][0])
+        y_min = int(bbox[0][1])
+        x_max = int(bbox[2][0])
+        y_max = int(bbox[2][1])
 
-        text: str = results['text'][i]
-        conf = int(results['conf'][i])
+        # Largura e Altura do texto reconhecido
+        w = x_max - x_min
+        h = y_max - y_min
 
-        if conf > 70 and h > 40 and w > 300 and text.isdecimal() and x > image_width / 2:
+        if conf > 0.7 and h > 20 and text.isdecimal():
             return text
+            
+    return None

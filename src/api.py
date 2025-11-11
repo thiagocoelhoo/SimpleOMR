@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import FastAPI, UploadFile
 from fastapi.responses import Response
 import numpy as np
@@ -9,7 +11,6 @@ from OMR.marks import get_answers, paint_marks
 from OMR.ocr import find_matricula
 
 app = FastAPI()
-
 
 async def load_image(file: UploadFile):
     if file.content_type is None or not file.content_type.startswith('image'):
@@ -72,7 +73,14 @@ async def get_answers_from_image(files: list[UploadFile]):
     for file in files:
         image = await load_image(file)
         image = cv2.resize(image, dsize=(1400, 2200))
-        matricula = find_matricula(image)
+        
+        img_matricula = image[
+            550:900,
+            750:1300
+        ]
+        img_matricula = cv2.resize(img_matricula, dsize=None, fx=0.5, fy=0.5)
+        matricula = await asyncio.to_thread(find_matricula, img_matricula)    
+        
         column_images = find_columns(image)
         answers = get_answers(column_images)
         all_answers.append({
