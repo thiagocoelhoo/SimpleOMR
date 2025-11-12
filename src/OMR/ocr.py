@@ -10,7 +10,6 @@ def find_matricula(image):
 
     # Reconhecimento de Texto com EasyOCR
     results = reader.readtext(image)
-    print('results:', results)
 
     for (bbox, text, conf) in results:    
         # Coordenadas do bounding box
@@ -23,7 +22,7 @@ def find_matricula(image):
         w = x_max - x_min
         h = y_max - y_min
 
-        if conf > 0.7 and h > 20 and text.isdecimal():
+        if conf > 0.5 and h > 20 and text.isdecimal():
             return text
             
     return None
