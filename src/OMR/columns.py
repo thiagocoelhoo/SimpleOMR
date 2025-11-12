@@ -143,7 +143,7 @@ def preprocess_image(image: np.ndarray, debug) -> np.ndarray:
 
     # Limiar adaptativo binário invertido
     binary_image = cv2.adaptiveThreshold(
-        gray_image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 13
+        gray_image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 21, 41
     )
     # show(binary_image, debug)
 
